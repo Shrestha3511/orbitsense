@@ -98,6 +98,52 @@ body {
   font-weight: 600;
 }
 
+.about-section {
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 10px;
+}
+
+.about-section summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.about-section summary::-webkit-details-marker { display: none; }
+
+.about-section summary::after {
+  content: "+";
+  float: right;
+  color: var(--blue);
+}
+
+.about-section[open] summary::after { content: "−"; }
+
+.about-copy {
+  color: var(--ink-muted);
+  font-family: Arial, sans-serif !important;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 6px 0 12px;
+}
+
+.about-subtitle {
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  margin-top: 12px;
+}
+
+.about-warning { color: var(--amber); }
+
+.about-link {
+  color: var(--blue);
+  display: inline-block;
+  font-size: 10px;
+  margin: 2px 0 8px;
+}
+
 .live-dot {
   width: 8px;
   height: 8px;
