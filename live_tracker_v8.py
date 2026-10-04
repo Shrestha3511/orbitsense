@@ -36,6 +36,7 @@ COL_AMBER = "#c98a2e"
 COL_RED = "#c14b4b"
 COL_GREEN = "#3d9469"
 COL_HIGHLIGHT = "#f2f2f2"
+COL_TARGET = "#ffd166"
 DEFAULT_CAMERA = dict(
     eye=dict(x=1.45, y=1.35, z=1.2),
     center=dict(x=0.0, y=0.0, z=0.0),
@@ -276,7 +277,7 @@ def build_swarm_trace(current_pos, valid, highlight_idx=None):
     if highlight_idx is not None and valid[highlight_idx]:
         pos_in_swarm = int(np.searchsorted(np.where(valid)[0], highlight_idx))
         if 0 <= pos_in_swarm < len(colors):
-            colors[pos_in_swarm] = COL_HIGHLIGHT
+            colors[pos_in_swarm] = COL_TARGET
     return go.Scatter3d(x=xs, y=ys, z=zs, mode="markers", marker=dict(size=1.5, color=colors, opacity=0.55),
         hoverinfo="skip", name=f"{valid.sum()} tracked", showlegend=False)
 
@@ -296,14 +297,17 @@ def camera_for_target(target_pos):
 def build_dynamic_figure_patch(current_pos, valid, risk_slots, locked_idx, lock_xyz, lock_text, orbit_xyz, target_pos=None, reset_view=False):
     patched = Patch()
     swarm_colors = [COL_BLUE] * int(valid.sum())
+    swarm_sizes = [1.5] * int(valid.sum())
     if locked_idx is not None and valid[locked_idx]:
         pos_in_swarm = int(np.searchsorted(np.where(valid)[0], locked_idx))
         if 0 <= pos_in_swarm < len(swarm_colors):
-            swarm_colors[pos_in_swarm] = COL_HIGHLIGHT
+            swarm_colors[pos_in_swarm] = COL_TARGET
+            swarm_sizes[pos_in_swarm] = 6
     patched["data"][3]["x"] = current_pos[valid, 0]
     patched["data"][3]["y"] = current_pos[valid, 1]
     patched["data"][3]["z"] = current_pos[valid, 2]
     patched["data"][3]["marker"]["color"] = swarm_colors
+    patched["data"][3]["marker"]["size"] = swarm_sizes
 
     for idx, s in enumerate(risk_slots):
         ti = 4 + idx
@@ -314,9 +318,14 @@ def build_dynamic_figure_patch(current_pos, valid, risk_slots, locked_idx, lock_
     patched["data"][LOCK_TRACE_IDX]["y"] = lock_xyz[1]
     patched["data"][LOCK_TRACE_IDX]["z"] = lock_xyz[2]
     patched["data"][LOCK_TRACE_IDX]["text"] = lock_text
+    patched["data"][LOCK_TRACE_IDX]["marker"]["color"] = COL_TARGET
+    patched["data"][LOCK_TRACE_IDX]["marker"]["size"] = 10
+    patched["data"][LOCK_TRACE_IDX]["marker"]["line"]["color"] = "#0a0d12"
     patched["data"][ORBIT_TRACE_IDX]["x"] = orbit_xyz[0]
     patched["data"][ORBIT_TRACE_IDX]["y"] = orbit_xyz[1]
     patched["data"][ORBIT_TRACE_IDX]["z"] = orbit_xyz[2]
+    patched["data"][ORBIT_TRACE_IDX]["line"]["color"] = COL_TARGET
+    patched["data"][ORBIT_TRACE_IDX]["line"]["width"] = 5
 
     if target_pos is not None:
         cam = camera_for_target(target_pos)
@@ -467,9 +476,9 @@ app.layout = html.Div("OrbitSense is initializing...")
 def build_initial_state():
     _static = build_static_traces()
     _init_pos, _init_valid, _init_risk_slots, _stats, _, _, _ = compute_dynamic(0)
-    _lock_trace = go.Scatter3d(x=[], y=[], z=[], mode="markers", marker=dict(size=8, color=COL_HIGHLIGHT, symbol="diamond",
-        line=dict(color=COL_BLUE, width=2)), hoverinfo="text", text=[], name="Selected", showlegend=False)
-    _orbit_trace = go.Scatter3d(x=[], y=[], z=[], mode="lines", line=dict(color=COL_BLUE, width=3, dash="dot"),
+    _lock_trace = go.Scatter3d(x=[], y=[], z=[], mode="markers", marker=dict(size=10, color=COL_TARGET, symbol="diamond",
+        line=dict(color="#0a0d12", width=2)), hoverinfo="text", text=[], name="Selected", showlegend=False)
+    _orbit_trace = go.Scatter3d(x=[], y=[], z=[], mode="lines", line=dict(color=COL_TARGET, width=5, dash="dot"),
         hoverinfo="skip", name="Orbit", showlegend=False)
     fig = go.Figure(data=_static + [build_swarm_trace(_init_pos, _init_valid)] + [
         go.Scatter3d(x=s["x"], y=s["y"], z=s["z"], mode="lines+markers", line=dict(color=s["color"], width=6),
