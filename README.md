@@ -15,6 +15,7 @@ Interactive satellite conjunction awareness dashboard for education and research
 - Live active-satellite ingestion from CelesTrak with local cache fallback (`tle_cache.txt`)
 - SGP4-based propagation and conjunction candidate screening
 - Fine-resolution closest-approach refinement with pairwise propagation safeguards
+- Search and lock workflow that supports blank input handling, NORAD IDs, case-insensitive/partial name lookup, explicit no-match feedback, repeated locking, and clear/unlock reset
 - Empirical uncertainty model and probability-of-collision estimate
 - Student and advanced dashboard modes, with simple maneuver sandbox
 - Historical validation and additional experiment scripts
@@ -93,9 +94,15 @@ Install dev dependencies and run tests:
 ```bash
 pip install -r requirements-dev.txt
 pytest -q
+python -m compileall -q .
 ```
 
 Tests are intentionally offline and do not rely on live CelesTrak or remote texture downloads.
+
+## Public policy documents
+
+- [TERMS.md](TERMS.md)
+- [PRIVACY.md](PRIVACY.md)
 
 ## Scientific limitations
 

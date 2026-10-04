@@ -27,7 +27,7 @@ LOCK_TRACE_IDX = 4 + MAX_RISK_SLOTS
 ORBIT_TRACE_IDX = LOCK_TRACE_IDX + 1
 STARFIELD_EXTENT = 40000.0
 TIME_SCRUB_LIMIT_MIN = 180
-ZOOM_WINDOW_KM = 3000  # +/- window used for the "zoom to satellite" axis-range focus
+CAMERA_CENTER_SCALE_KM = 18000.0
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "tle_cache.txt")
 CACHE_MAX_AGE_HOURS = 2
 
@@ -36,6 +36,11 @@ COL_AMBER = "#c98a2e"
 COL_RED = "#c14b4b"
 COL_GREEN = "#3d9469"
 COL_HIGHLIGHT = "#f2f2f2"
+DEFAULT_CAMERA = dict(
+    eye=dict(x=1.45, y=1.35, z=1.2),
+    center=dict(x=0.0, y=0.0, z=0.0),
+    up=dict(x=0.0, y=0.0, z=1.0),
+)
 
 TIMEZONE_OPTIONS = [
     {"label": "UTC", "value": 0.0},
@@ -137,7 +142,7 @@ def initialize_runtime(force=False):
         names.append(lines[i].strip())
         sats.append(Satrec.twoline2rv(lines[i + 1], lines[i + 2]))
     if len(sats) == 0:
-        raise RuntimeError("Parsed 0 satellites — check TLE cache/content.")
+        raise RuntimeError("Parsed 0 satellites; check TLE cache/content.")
     NAMES, SATS = names, sats
     NAMES_LOWER = [n.lower() for n in NAMES]
     _runtime_initialized = True
@@ -174,7 +179,7 @@ def plain_language_risk(pc):
     if pc > 1e-4:
         return "HIGH", COL_RED, "These two objects are close enough, and moving fast enough, that a collision is a real possibility."
     if pc > 1e-6:
-        return "MODERATE", COL_AMBER, "These two objects will pass close to each other — worth continuing to track."
+        return "MODERATE", COL_AMBER, "These two objects will pass close to each other, worth continuing to track."
     return "LOW", COL_GREEN, "These two objects will miss each other by a comfortable margin."
 
 
@@ -190,6 +195,25 @@ def find_satellite(query):
         if q in n:
             return i, NAMES[i]
     return None, None
+
+
+def normalize_search_query(query):
+    return (query or "").strip()
+
+
+def search_satellite_lock(triggered_id, query):
+    normalized = normalize_search_query(query)
+    if triggered_id == "clear-focus-btn":
+        return None, None, "", ""
+    if not normalized:
+        return None, None, "Enter a satellite name or NORAD ID.", query
+    idx, name = find_satellite(normalized)
+    if idx is None:
+        return no_update, no_update, f'No match: "{normalized}"', query
+    now = datetime.now(timezone.utc)
+    jd, fr = jday(now.year, now.month, now.day, now.hour, now.minute, now.second)
+    sat_pos = satellite_telemetry(idx, jd, fr)["pos"]
+    return idx, sat_pos.tolist(), f"LOCKED: {name} (NORAD {SATS[idx].satnum})", query
 
 
 def satellite_telemetry(idx, jd, fr):
@@ -255,6 +279,55 @@ def build_swarm_trace(current_pos, valid, highlight_idx=None):
             colors[pos_in_swarm] = COL_HIGHLIGHT
     return go.Scatter3d(x=xs, y=ys, z=zs, mode="markers", marker=dict(size=1.5, color=colors, opacity=0.55),
         hoverinfo="skip", name=f"{valid.sum()} tracked", showlegend=False)
+
+
+def camera_for_target(target_pos):
+    pos = np.asarray(target_pos, dtype=float)
+    if pos.shape != (3,) or not np.all(np.isfinite(pos)):
+        return None
+    center = np.clip(-pos / CAMERA_CENTER_SCALE_KM, -0.6, 0.6)
+    return dict(
+        eye=DEFAULT_CAMERA["eye"],
+        up=DEFAULT_CAMERA["up"],
+        center=dict(x=float(center[0]), y=float(center[1]), z=float(center[2])),
+    )
+
+
+def build_dynamic_figure_patch(current_pos, valid, risk_slots, locked_idx, lock_xyz, lock_text, orbit_xyz, target_pos=None, reset_view=False):
+    patched = Patch()
+    swarm_colors = [COL_BLUE] * int(valid.sum())
+    if locked_idx is not None and valid[locked_idx]:
+        pos_in_swarm = int(np.searchsorted(np.where(valid)[0], locked_idx))
+        if 0 <= pos_in_swarm < len(swarm_colors):
+            swarm_colors[pos_in_swarm] = COL_HIGHLIGHT
+    patched["data"][3]["x"] = current_pos[valid, 0]
+    patched["data"][3]["y"] = current_pos[valid, 1]
+    patched["data"][3]["z"] = current_pos[valid, 2]
+    patched["data"][3]["marker"]["color"] = swarm_colors
+
+    for idx, s in enumerate(risk_slots):
+        ti = 4 + idx
+        patched["data"][ti]["x"] = s["x"]; patched["data"][ti]["y"] = s["y"]; patched["data"][ti]["z"] = s["z"]
+        patched["data"][ti]["line"]["color"] = s["color"]; patched["data"][ti]["marker"]["color"] = s["color"]
+        patched["data"][ti]["text"] = s["text"]; patched["data"][ti]["name"] = s["name"]
+    patched["data"][LOCK_TRACE_IDX]["x"] = lock_xyz[0]
+    patched["data"][LOCK_TRACE_IDX]["y"] = lock_xyz[1]
+    patched["data"][LOCK_TRACE_IDX]["z"] = lock_xyz[2]
+    patched["data"][LOCK_TRACE_IDX]["text"] = lock_text
+    patched["data"][ORBIT_TRACE_IDX]["x"] = orbit_xyz[0]
+    patched["data"][ORBIT_TRACE_IDX]["y"] = orbit_xyz[1]
+    patched["data"][ORBIT_TRACE_IDX]["z"] = orbit_xyz[2]
+
+    if target_pos is not None:
+        cam = camera_for_target(target_pos)
+        if cam is not None:
+            patched["layout"]["scene"]["camera"] = cam
+    elif reset_view:
+        patched["layout"]["scene"]["camera"] = DEFAULT_CAMERA
+        patched["layout"]["scene"]["xaxis"]["autorange"] = True
+        patched["layout"]["scene"]["yaxis"]["autorange"] = True
+        patched["layout"]["scene"]["zaxis"]["autorange"] = True
+    return patched
 
 
 def compute_dynamic(time_offset_min=0):
@@ -404,8 +477,8 @@ def build_initial_state():
         for s in _init_risk_slots] + [_lock_trace, _orbit_trace])
     fig.update_layout(
         scene=dict(xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
-                   bgcolor="#0a0d12", aspectmode="data"),
-        paper_bgcolor="#0a0d12", font=dict(color="#d6dce4", family="JetBrains Mono, monospace"),
+                   bgcolor="#151b22", aspectmode="data", camera=DEFAULT_CAMERA),
+        paper_bgcolor="#151b22", font=dict(color="#dce3eb", family="Consolas, Menlo, Monaco, monospace"),
         showlegend=False, margin=dict(l=0, r=0, t=0, b=0), uirevision="keep")
     return fig, _stats
 
@@ -416,8 +489,8 @@ def configure_layout(initial_fig, initial_stats):
     html.Div(className="topbar", style={"display": "flex", "alignItems": "center", "justifyContent": "space-between", "padding": "0 18px"}, children=[
         html.Div(style={"display": "flex", "alignItems": "center"}, children=[
             html.Span(className="live-dot"),
-            html.Span("ORBITSENSE", style={"fontWeight": 600, "fontSize": "14px", "color": "#d6dce4", "letterSpacing": "0.5px"}),
-            html.Span(" SSA-OPS", className="mono", style={"color": "#5c6570", "fontSize": "11px", "marginLeft": "4px"}),
+            html.Span("ORBITSENSE", style={"fontWeight": 700, "fontSize": "14px", "color": "#1c242d", "letterSpacing": "0.5px"}),
+            html.Span(" SSA-OPS", className="mono", style={"color": "#586572", "fontSize": "11px", "marginLeft": "4px"}),
         ]),
         html.Div(style={"display": "flex", "alignItems": "center", "gap": "8px"}, children=[
             dcc.Input(id="search-input", type="text", placeholder="Search satellite or NORAD ID",
@@ -448,9 +521,9 @@ def configure_layout(initial_fig, initial_stats):
     html.Div(className="center-canvas", children=[
         dcc.Graph(id="live-graph", figure=initial_fig, style={"height": "100%", "width": "100%"}, config={"displayModeBar": False}),
         html.Div(style={"position": "absolute", "bottom": "12px", "right": "12px",
-                         "background": "rgba(16,20,27,0.88)", "border": "1px solid #232a35", "borderRadius": "2px",
+                         "background": "rgba(245,241,232,0.94)", "border": "1px solid #b8b1a5", "borderRadius": "1px",
                          "padding": "9px 12px", "fontSize": "10px", "lineHeight": "1.8"}, className="mono", children=[
-            html.Div("LEGEND", style={"color": "#5c6570", "fontWeight": 600, "marginBottom": "4px", "letterSpacing": "0.5px"}),
+            html.Div("LEGEND", style={"color": "#586572", "fontWeight": 600, "marginBottom": "4px", "letterSpacing": "0.5px"}),
             html.Div([html.Span("\u25a0", style={"color": COL_BLUE, "marginRight": "6px"}), "Tracked"]),
             html.Div([html.Span("\u25a0", style={"color": COL_AMBER, "marginRight": "6px"}), "Moderate risk"]),
             html.Div([html.Span("\u25a0", style={"color": COL_RED, "marginRight": "6px"}), "Severe conjunction"]),
@@ -477,14 +550,14 @@ def configure_layout(initial_fig, initial_stats):
 
         html.Div(id="student-panel", children=[html.Div(id="student-output")]),
         html.Div(id="advanced-panel", style={"display": "none"}, children=[
-            html.Div("SANDBOX \u2014 dV MANEUVER", className="section-title", style={"marginTop": "12px"}),
+            html.Div("SANDBOX: dV MANEUVER", className="section-title", style={"marginTop": "12px"}),
             dcc.RadioItems(id="mode-toggle",
                 options=[{"label": " Physics", "value": "physics"}, {"label": " AI", "value": "ai"}],
                 value="physics", className="dash-radio-items mono", style={"marginBottom": "8px"}, inline=True),
-            html.Div("dV (m/s)", className="mono", style={"fontSize": "10px", "color": "#5c6570"}),
+            html.Div("dV (m/s)", className="mono", style={"fontSize": "10px", "color": "#586572"}),
             dcc.Slider(id="dv-slider", min=-5, max=5, step=0.1, value=0, marks={-5: "-5", 0: "0", 5: "+5"},
                        tooltip={"placement": "bottom", "always_visible": False}),
-            html.Div("sigma tracking uncertainty (m)", className="mono", style={"fontSize": "10px", "color": "#5c6570", "marginTop": "8px"}),
+            html.Div("sigma tracking uncertainty (m)", className="mono", style={"fontSize": "10px", "color": "#586572", "marginTop": "8px"}),
             dcc.Slider(id="sigma-slider", min=100, max=2000, step=50, value=1000,
                        marks={100: "100", 1000: "1000", 2000: "2000"},
                        tooltip={"placement": "bottom", "always_visible": False}),
@@ -493,7 +566,7 @@ def configure_layout(initial_fig, initial_stats):
     ]),
 
     html.Div(className="bottom-dock", children=[
-        html.Div(id="time-label", className="mono", style={"fontSize": "10.5px", "color": "#5c6570", "marginBottom": "4px"}),
+        html.Div(id="time-label", className="mono", style={"fontSize": "10.5px", "color": "#586572", "marginBottom": "4px"}),
         dcc.Slider(id="time-slider", min=-TIME_SCRUB_LIMIT_MIN, max=TIME_SCRUB_LIMIT_MIN, step=1, value=0,
                    marks={-180: "-3h", -90: "-1.5h", 0: "NOW", 90: "+1.5h", 180: "+3h"},
                    tooltip={"placement": "bottom", "always_visible": False}),
@@ -553,19 +626,16 @@ def toggle_view_mode(mode):
 
 
 @app.callback(
-    Output("locked-sat-store", "data"), Output("search-feedback", "children"),
+    Output("locked-sat-store", "data"),
+    Output("focus-camera-store", "data", allow_duplicate=True),
+    Output("search-feedback", "children"),
+    Output("search-input", "value"),
     Input("search-btn", "n_clicks"), Input("search-input", "n_submit"), Input("clear-focus-btn", "n_clicks"),
     State("search-input", "value"),
+    prevent_initial_call=True,
 )
 def do_search(n_clicks, n_submit, n_clear, query):
-    if ctx.triggered_id == "clear-focus-btn":
-        return None, ""
-    if not query:
-        return no_update, ""
-    idx, name = find_satellite(query)
-    if idx is None:
-        return no_update, f'No match: "{query}"'
-    return idx, f"FOUND: {name}"
+    return search_satellite_lock(ctx.triggered_id, query)
 
 
 @app.callback(
@@ -643,53 +713,27 @@ def update(n, locked_idx, time_offset, focus_target):
     is_new_lock = ctx.triggered_id == "locked-sat-store"
     is_cleared_lock = is_new_lock and locked_idx is None
     is_new_focus = ctx.triggered_id == "focus-camera-store" and focus_target is not None
+    is_cleared_focus = ctx.triggered_id == "focus-camera-store" and focus_target is None
 
     if is_first_load:
         return _initial_fig, f"{stats['count']:,}", str(stats['flagged']), closest_txt, pc_txt, utc_iso, stats["leaderboard"], _table_rows(stats["leaderboard"])
 
-    patched = Patch()
-    swarm_colors = [COL_BLUE] * int(valid.sum())
-    if locked_idx is not None and valid[locked_idx]:
-        pos_in_swarm = int(np.searchsorted(np.where(valid)[0], locked_idx))
-        if 0 <= pos_in_swarm < len(swarm_colors):
-            swarm_colors[pos_in_swarm] = COL_HIGHLIGHT
-    patched["data"][3]["x"] = current_pos[valid, 0]
-    patched["data"][3]["y"] = current_pos[valid, 1]
-    patched["data"][3]["z"] = current_pos[valid, 2]
-    patched["data"][3]["marker"]["color"] = swarm_colors
-
-    for idx, s in enumerate(risk_slots):
-        ti = 4 + idx
-        patched["data"][ti]["x"] = s["x"]; patched["data"][ti]["y"] = s["y"]; patched["data"][ti]["z"] = s["z"]
-        patched["data"][ti]["line"]["color"] = s["color"]; patched["data"][ti]["marker"]["color"] = s["color"]
-        patched["data"][ti]["text"] = s["text"]; patched["data"][ti]["name"] = s["name"]
-    patched["data"][LOCK_TRACE_IDX]["x"] = lock_x
-    patched["data"][LOCK_TRACE_IDX]["y"] = lock_y
-    patched["data"][LOCK_TRACE_IDX]["z"] = lock_z
-    patched["data"][LOCK_TRACE_IDX]["text"] = lock_text
-    patched["data"][ORBIT_TRACE_IDX]["x"] = orbit_x
-    patched["data"][ORBIT_TRACE_IDX]["y"] = orbit_y
-    patched["data"][ORBIT_TRACE_IDX]["z"] = orbit_z
-
-    # Zoom via explicit axis ranges (real data units, km) instead of camera eye/center --
-    # deterministic and verifiable, unlike Plotly's normalized camera coordinates.
     target_pos = None
     if is_new_lock and locked_idx is not None:
         target_pos = np.array([lock_x[0], lock_y[0], lock_z[0]])
     elif is_new_focus:
         target_pos = np.array(focus_target)
-
-    if target_pos is not None:
-        patched["layout"]["scene"]["xaxis"]["range"] = [target_pos[0] - ZOOM_WINDOW_KM, target_pos[0] + ZOOM_WINDOW_KM]
-        patched["layout"]["scene"]["yaxis"]["range"] = [target_pos[1] - ZOOM_WINDOW_KM, target_pos[1] + ZOOM_WINDOW_KM]
-        patched["layout"]["scene"]["zaxis"]["range"] = [target_pos[2] - ZOOM_WINDOW_KM, target_pos[2] + ZOOM_WINDOW_KM]
-        patched["layout"]["scene"]["xaxis"]["autorange"] = False
-        patched["layout"]["scene"]["yaxis"]["autorange"] = False
-        patched["layout"]["scene"]["zaxis"]["autorange"] = False
-    elif is_cleared_lock:
-        patched["layout"]["scene"]["xaxis"]["autorange"] = True
-        patched["layout"]["scene"]["yaxis"]["autorange"] = True
-        patched["layout"]["scene"]["zaxis"]["autorange"] = True
+    patched = build_dynamic_figure_patch(
+        current_pos=current_pos,
+        valid=valid,
+        risk_slots=risk_slots,
+        locked_idx=locked_idx,
+        lock_xyz=(lock_x, lock_y, lock_z),
+        lock_text=lock_text,
+        orbit_xyz=(orbit_x, orbit_y, orbit_z),
+        target_pos=target_pos,
+        reset_view=(is_cleared_lock or is_cleared_focus),
+    )
 
     return patched, f"{stats['count']:,}", str(stats['flagged']), closest_txt, pc_txt, utc_iso, stats["leaderboard"], _table_rows(stats["leaderboard"])
 
@@ -712,18 +756,41 @@ def format_time_label(utc_iso, tz_offset, time_offset):
     return f"VIEWING: {display_time.strftime('%Y-%m-%d %H:%M:%S')} {tz_label}{suffix}"
 
 
-@app.callback(Output("selected-telemetry", "children"), Input("selected-pair-store", "data"))
-def update_selected_telemetry(pair):
-    if not pair:
+@app.callback(
+    Output("selected-telemetry", "children"),
+    Input("selected-pair-store", "data"),
+    Input("locked-sat-store", "data"),
+    Input("last-computed-utc", "data"),
+)
+def update_selected_telemetry(pair, locked_idx, utc_iso):
+    sections = []
+    if locked_idx is not None and utc_iso:
+        dt = datetime.fromisoformat(utc_iso)
+        jd, fr = jday(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+        try:
+            sat = satellite_telemetry(locked_idx, jd, fr)
+        except RuntimeError as exc:
+            sections.append(html.Div(f"LOCK ERROR: {exc}", style={"color": COL_RED}))
+        else:
+            sections.append(html.Div([
+                html.Div("LOCKED SATELLITE", className="section-title", style={"marginTop": "0"}),
+                html.Div(sat["name"], style={"color": "#1c242d", "fontWeight": 600, "marginBottom": "4px"}),
+                html.Div(f"NORAD: {sat['norad_id']}  Alt: {sat['altitude_km']:.1f} km"),
+                html.Div(f"Speed: {sat['speed_kms']:.3f} km/s  Incl: {sat['inclination_deg']:.2f}\N{DEGREE SIGN}"),
+            ], style={"marginBottom": "10px"}))
+    if pair:
+        sections.append(html.Div([
+            html.Div("SELECTED CONJUNCTION", className="section-title", style={"marginTop": "0"}),
+            html.Div(pair["pair"], style={"color": "#1c242d", "fontWeight": 600, "marginBottom": "6px"}),
+            html.Div(f"TCA: T-{pair['tca_min']:.1f} min"),
+            html.Div(f"Miss: {pair['miss_km']} km   RelV: {pair['rel_v']} km/s"),
+            html.Div(f"Pc: {pair['pc']}"),
+            html.Div(pair["severity"], style={"color": COL_RED if pair["severity"] == "CRITICAL" else (COL_AMBER if pair["severity"] == "MODERATE" else COL_GREEN),
+                                                "fontWeight": 600, "marginTop": "6px"}),
+        ]))
+    if not sections:
         return "No conjunction flagged yet."
-    return html.Div([
-        html.Div(pair["pair"], style={"color": "#d6dce4", "fontWeight": 600, "marginBottom": "6px"}),
-        html.Div(f"TCA: T-{pair['tca_min']:.1f} min"),
-        html.Div(f"Miss: {pair['miss_km']} km   RelV: {pair['rel_v']} km/s"),
-        html.Div(f"Pc: {pair['pc']}"),
-        html.Div(pair["severity"], style={"color": COL_RED if pair["severity"] == "CRITICAL" else (COL_AMBER if pair["severity"] == "MODERATE" else COL_GREEN),
-                                            "fontWeight": 600, "marginTop": "6px"}),
-    ])
+    return html.Div(sections)
 
 
 @app.callback(Output("student-output", "children"), Input("selected-pair-store", "data"))
@@ -756,7 +823,7 @@ def update_sandbox(dv_m_s, sigma_m, mode, pair):
     if mode == "ai":
         return html.Div([
             html.Div(f"Isolation Forest anomaly rank: {pair['risk']:.0f} / 100", style={"color": COL_BLUE}),
-            html.Div("(population-relative — doesn't move with these sliders.)", style={"opacity": 0.6, "fontSize": "10px", "marginTop": "6px"}),
+            html.Div("(population-relative, not affected by these sliders.)", style={"opacity": 0.6, "fontSize": "10px", "marginTop": "6px"}),
         ])
     r0 = np.array(pair["r0"]); v0 = np.array(pair["v0"])
     r_rel_baseline = np.array(pair["r_rel_km"])
