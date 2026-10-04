@@ -516,6 +516,37 @@ def configure_layout(initial_fig, initial_stats):
         stat_card("Closest Approach", "stat-closest"),
         stat_card("Highest Pc", "stat-pc", color=COL_RED),
         html.Div(id="mode-status", className="mono", style={"color": COL_GREEN, "fontSize": "10.5px", "marginTop": "6px"}),
+        html.Details(className="about-section", children=[
+            html.Summary("ABOUT ORBITSENSE", className="section-title"),
+            html.Div([
+                html.P(
+                    "OrbitSense is an educational satellite-tracking dashboard. "
+                    "It visualizes active satellites and screens for possible close approaches.",
+                    className="about-copy",
+                ),
+                html.Div("HOW IT WORKS", className="about-subtitle"),
+                html.P(
+                    "The app retrieves public orbital elements (TLEs), propagates satellite "
+                    "positions with SGP4, then refines a shortlist of nearby pairs over a "
+                    "three-hour window.",
+                    className="about-copy",
+                ),
+                html.Div("LIMITATIONS", className="about-subtitle"),
+                html.P(
+                    "This is an experimental learning tool. Its simplified uncertainty and "
+                    "collision-probability estimates are not operational or mission-grade. "
+                    "Never use them to make real spacecraft maneuver decisions.",
+                    className="about-copy about-warning",
+                ),
+                html.A(
+                    "Data source: CelesTrak",
+                    href="https://celestrak.org/",
+                    target="_blank",
+                    rel="noopener noreferrer",
+                    className="about-link",
+                ),
+            ]),
+        ]),
     ]),
 
     html.Div(className="center-canvas", children=[
