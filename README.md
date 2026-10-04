@@ -20,9 +20,11 @@ Interactive satellite conjunction awareness dashboard for education and research
 - Student and advanced dashboard modes, with simple maneuver sandbox
 - Historical validation and additional experiment scripts
 
-## Screenshot / demo placeholder
+## Dashboard preview
 
-Add an updated dashboard screenshot (or GIF) here after your next UI capture.
+![OrbitSense dashboard showing satellite tracking and conjunction screening](assets/orbitsense-dashboard.jpg)
+
+*Live satellite fleet, selected satellite, and conjunction leaderboard.*
 
 ## Architecture and data flow
 
