@@ -13,7 +13,14 @@ from sklearn.preprocessing import StandardScaler
 # actually exist to find (unlike the 2-satellite "stations" group).
 SAMPLE_SIZE = 150
 url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=tle"
-lines = requests.get(url).text.strip().splitlines()
+try:
+    resp = requests.get(url, timeout=20)
+    resp.raise_for_status()
+except requests.RequestException as exc:
+    raise RuntimeError(f"Failed to fetch Starlink TLE data from CelesTrak: {exc}") from exc
+lines = resp.text.strip().splitlines()
+if len(lines) < 3:
+    raise RuntimeError("CelesTrak Starlink response did not contain enough TLE lines.")
 
 satellites = []
 for i in range(0, min(len(lines), SAMPLE_SIZE * 3), 3):

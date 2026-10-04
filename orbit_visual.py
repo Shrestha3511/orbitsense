@@ -6,7 +6,14 @@ from datetime import datetime, timedelta, timezone
 
 # 1. Pull real, live satellite data — a small, recognizable set (space stations)
 url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle"
-lines = requests.get(url).text.strip().splitlines()
+try:
+    resp = requests.get(url, timeout=20)
+    resp.raise_for_status()
+except requests.RequestException as exc:
+    raise RuntimeError(f"Failed to fetch station TLE data from CelesTrak: {exc}") from exc
+lines = resp.text.strip().splitlines()
+if len(lines) < 3:
+    raise RuntimeError("CelesTrak station response did not contain enough TLE lines.")
 
 satellites = []
 for i in range(0, len(lines), 3):

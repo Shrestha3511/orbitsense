@@ -28,7 +28,7 @@ ORBIT_TRACE_IDX = LOCK_TRACE_IDX + 1
 STARFIELD_EXTENT = 40000.0
 TIME_SCRUB_LIMIT_MIN = 180
 ZOOM_WINDOW_KM = 3000  # +/- window used for the "zoom to satellite" axis-range focus
-CACHE_FILE = "tle_cache.txt"
+CACHE_FILE = os.path.join(os.path.dirname(__file__), "tle_cache.txt")
 CACHE_MAX_AGE_HOURS = 2
 
 COL_BLUE = "#4f8fc0"
@@ -46,17 +46,11 @@ TIMEZONE_OPTIONS = [
     {"label": "JST (UTC+9)", "value": 9.0},
 ]
 
-print("Building textured Earth...")
 EARTH_TEXTURE_URL = "https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_atmos_2048.jpg"
-img = Image.open(BytesIO(requests.get(EARTH_TEXTURE_URL).content))
 GRID_W, GRID_H = 140, 70
 N_COLORS = 180
-img_small = img.resize((GRID_W, GRID_H), Image.LANCZOS).convert("RGB")
-img_q = img_small.quantize(colors=N_COLORS, method=Image.MEDIANCUT)
-_palette = img_q.getpalette()[: N_COLORS * 3]
-_palette_rgb = [tuple(_palette[i : i + 3]) for i in range(0, len(_palette), 3)]
-EARTH_INDEX_GRID = np.array(img_q).astype(float)
-EARTH_COLORSCALE = [[i / (N_COLORS - 1), f"rgb({r},{g},{b})"] for i, (r, g, b) in enumerate(_palette_rgb)]
+EARTH_INDEX_GRID = np.zeros((GRID_H, GRID_W), dtype=float)
+EARTH_COLORSCALE = [[0, "#1b3a6b"], [1, "#2f73bf"]]
 _lon = np.linspace(0, 2 * np.pi, GRID_W)
 _colat = np.linspace(0, np.pi, GRID_H)
 _LON, _COLAT = np.meshgrid(_lon, _colat)
@@ -68,7 +62,9 @@ GLOW_R = R_EARTH * 1.035
 GLOW_X = GLOW_R * np.cos(_gu) * np.sin(_gv)
 GLOW_Y = GLOW_R * np.sin(_gu) * np.sin(_gv)
 GLOW_Z = GLOW_R * np.cos(_gv)
-print("Earth ready.")
+
+NAMES, SATS, NAMES_LOWER = [], [], []
+_runtime_initialized = False
 
 
 def fetch_tle_text():
@@ -80,31 +76,72 @@ def fetch_tle_text():
             with open(CACHE_FILE) as f:
                 return f.read()
     print("Fetching fresh active-satellite catalog from CelesTrak...")
-    resp = requests.get(url, timeout=20)
-    text = resp.text
-    lines = text.strip().splitlines()
-    if resp.status_code != 200 or len(lines) < 3:
-        print(f"WARNING: fetch looks wrong (HTTP {resp.status_code}, {len(lines)} lines).")
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        text = resp.text
+        lines = text.strip().splitlines()
+        if len(lines) < 3:
+            raise RuntimeError(f"TLE fetch returned too few lines ({len(lines)}).")
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            f.write(text)
+        return text
+    except (requests.RequestException, RuntimeError) as exc:
         if os.path.exists(CACHE_FILE):
-            with open(CACHE_FILE) as f:
+            print(f"WARNING: failed to fetch fresh TLE data ({exc}); using cached catalog.")
+            with open(CACHE_FILE, encoding="utf-8") as f:
                 return f.read()
-        raise RuntimeError("TLE fetch failed and no cache exists yet.")
-    with open(CACHE_FILE, "w") as f:
-        f.write(text)
-    return text
+        raise RuntimeError(
+            "Unable to download TLE catalog from CelesTrak and no cache is available. "
+            "Check your network and retry."
+        ) from exc
 
 
-print("Loading satellite catalog...")
-raw_text = fetch_tle_text()
-lines = raw_text.strip().splitlines()
-NAMES, SATS = [], []
-for i in range(0, len(lines) - 2, 3):
-    NAMES.append(lines[i].strip())
-    SATS.append(Satrec.twoline2rv(lines[i + 1], lines[i + 2]))
-print(f"Loaded {len(SATS)} satellites.")
-if len(SATS) == 0:
-    raise RuntimeError("Parsed 0 satellites — check raw_text[:500].")
-NAMES_LOWER = [n.lower() for n in NAMES]
+def load_earth_texture():
+    global EARTH_INDEX_GRID, EARTH_COLORSCALE
+    print("Building textured Earth...")
+    for attempt in range(1, 4):
+        try:
+            resp = requests.get(EARTH_TEXTURE_URL, timeout=10)
+            resp.raise_for_status()
+            img = Image.open(BytesIO(resp.content))
+            img_small = img.resize((GRID_W, GRID_H), Image.LANCZOS).convert("RGB")
+            img_q = img_small.quantize(colors=N_COLORS, method=Image.MEDIANCUT)
+            _palette = img_q.getpalette()[: N_COLORS * 3]
+            _palette_rgb = [tuple(_palette[i : i + 3]) for i in range(0, len(_palette), 3)]
+            EARTH_INDEX_GRID = np.array(img_q).astype(float)
+            EARTH_COLORSCALE = [
+                [i / (N_COLORS - 1), f"rgb({r},{g},{b})"] for i, (r, g, b) in enumerate(_palette_rgb)
+            ]
+            print("Earth ready.")
+            return
+        except Exception as exc:
+            print(f"WARNING: Earth texture load attempt {attempt}/3 failed: {exc}")
+            time.sleep(0.5)
+    print("WARNING: using fallback procedural Earth texture.")
+    lat_gradient = np.linspace(0, 1, GRID_H).reshape(-1, 1)
+    EARTH_INDEX_GRID = np.repeat(lat_gradient, GRID_W, axis=1)
+    EARTH_COLORSCALE = [[0, "#12355b"], [0.45, "#225f9b"], [1, "#8bb7d9"]]
+
+
+def initialize_runtime(force=False):
+    global NAMES, SATS, NAMES_LOWER, _runtime_initialized
+    if _runtime_initialized and not force:
+        return
+    load_earth_texture()
+    print("Loading satellite catalog...")
+    raw_text = fetch_tle_text()
+    lines = raw_text.strip().splitlines()
+    names, sats = [], []
+    for i in range(0, len(lines) - 2, 3):
+        names.append(lines[i].strip())
+        sats.append(Satrec.twoline2rv(lines[i + 1], lines[i + 2]))
+    if len(sats) == 0:
+        raise RuntimeError("Parsed 0 satellites — check TLE cache/content.")
+    NAMES, SATS = names, sats
+    NAMES_LOWER = [n.lower() for n in NAMES]
+    _runtime_initialized = True
+    print(f"Loaded {len(SATS)} satellites.")
 
 
 def cw_delta_r(n, t, dv_rsw):
@@ -158,6 +195,8 @@ def find_satellite(query):
 def satellite_telemetry(idx, jd, fr):
     sat = SATS[idx]
     err, pos, vel = sat.sgp4(jd, fr)
+    if err != 0:
+        raise RuntimeError(f"SGP4 error for satellite index {idx}: code {err}")
     pos, vel = np.array(pos), np.array(vel)
     return dict(name=NAMES[idx], norad_id=sat.satnum, altitude_km=np.linalg.norm(pos) - R_EARTH,
                 speed_kms=np.linalg.norm(vel), inclination_deg=np.degrees(sat.inclo),
@@ -174,6 +213,21 @@ def satellite_orbit_path(idx, now, minutes=100, step=1):
         if err == 0:
             pts.append(pos)
     return np.array(pts)
+
+
+def propagate_pair_series(sat_a, sat_b, jdfr_points):
+    pa, pb, va, vb = [], [], [], []
+    for jd, fr in jdfr_points:
+        e1, p1, v1 = sat_a.sgp4(jd, fr)
+        e2, p2, v2 = sat_b.sgp4(jd, fr)
+        if e1 == 0 and e2 == 0:
+            pa.append(p1)
+            pb.append(p2)
+            va.append(v1)
+            vb.append(v2)
+    if not pa:
+        raise ValueError("No valid pair propagation points available.")
+    return map(np.array, (pa, pb, va, vb))
 
 
 def build_static_traces():
@@ -204,6 +258,8 @@ def build_swarm_trace(current_pos, valid, highlight_idx=None):
 
 
 def compute_dynamic(time_offset_min=0):
+    if not _runtime_initialized:
+        initialize_runtime()
     now = datetime.now(timezone.utc) + timedelta(minutes=time_offset_min)
     jd0, fr0 = jday(now.year, now.month, now.day, now.hour, now.minute, now.second)
 
@@ -231,14 +287,17 @@ def compute_dynamic(time_offset_min=0):
         if len(idxs) > MAX_PER_BUCKET:
             idxs = rng.choice(idxs, size=MAX_PER_BUCKET, replace=False)
         pos_c = np.zeros((len(idxs), len(coarse_times), 3))
+        pos_c.fill(np.nan)
         for bi, si in enumerate(idxs):
             for ti, (jd, fr) in enumerate(coarse_jdfr):
                 err, pos, vel = SATS[si].sgp4(jd, fr)
-                pos_c[bi, ti] = pos
+                if err == 0:
+                    pos_c[bi, ti] = pos
         min_dist = np.full((len(idxs), len(idxs)), np.inf)
         for t in range(len(coarse_times)):
             pt = pos_c[:, t, :]
             d = np.linalg.norm(pt[:, None, :] - pt[None, :, :], axis=-1)
+            d[np.isnan(d)] = np.inf
             min_dist = np.minimum(min_dist, d)
         np.fill_diagonal(min_dist, np.inf)
         iu, ju = np.triu_indices(len(idxs), k=1)
@@ -252,12 +311,10 @@ def compute_dynamic(time_offset_min=0):
     fine_jdfr = [jday(t.year, t.month, t.day, t.hour, t.minute, t.second) for t in fine_times]
     refined = []
     for i, j, _ in candidates:
-        pa, pb, va, vb = [], [], [], []
-        for jd, fr in fine_jdfr:
-            e1, p1, v1 = SATS[i].sgp4(jd, fr)
-            e2, p2, v2 = SATS[j].sgp4(jd, fr)
-            pa.append(p1); pb.append(p2); va.append(v1); vb.append(v2)
-        pa, pb, va, vb = map(np.array, (pa, pb, va, vb))
+        try:
+            pa, pb, va, vb = propagate_pair_series(SATS[i], SATS[j], fine_jdfr)
+        except ValueError:
+            continue
         d = np.linalg.norm(pa - pb, axis=1)
         idx = int(np.argmin(d))
         refined.append(dict(i=i, j=j, a=NAMES[i], b=NAMES[j], miss_km=d[idx],
@@ -285,7 +342,9 @@ def compute_dynamic(time_offset_min=0):
         burn_time = now + timedelta(seconds=(tca_seconds_from_now - lead_s))
         jd_b, fr_b = jday(burn_time.year, burn_time.month, burn_time.day,
                            burn_time.hour, burn_time.minute, burn_time.second + burn_time.microsecond / 1e6)
-        _, r0_burn, v0_burn = SATS[r["i"]].sgp4(jd_b, fr_b)
+        e_burn, r0_burn, v0_burn = SATS[r["i"]].sgp4(jd_b, fr_b)
+        if e_burn != 0:
+            continue
         tag, tag_color = severity_tag(pc)
         leaderboard.append(dict(
             a=r["a"], b=r["b"], pair=f"{r['a']} / {r['b']}", miss_km=round(r["miss_km"], 2),
@@ -297,10 +356,10 @@ def compute_dynamic(time_offset_min=0):
         ))
 
     risk_slots = []
-    for r, lb in zip(top_risks, leaderboard):
+    for lb in leaderboard:
         label = f"{lb['pair']}<br>Miss: {lb['miss_km']} km<br>Pc: {lb['pc']}<br>{lb['severity']}"
         color = COL_RED if lb["severity"] == "CRITICAL" else (COL_AMBER if lb["severity"] == "MODERATE" else COL_GREEN)
-        risk_slots.append(dict(x=[r["pa"][0], r["pb"][0]], y=[r["pa"][1], r["pb"][1]], z=[r["pa"][2], r["pb"][2]],
+        risk_slots.append(dict(x=[lb["pa"][0], lb["pb"][0]], y=[lb["pa"][1], lb["pb"][1]], z=[lb["pa"][2], lb["pb"][2]],
                                 color=color, text=[label, label], name=lb["severity"]))
     while len(risk_slots) < MAX_RISK_SLOTS:
         risk_slots.append(dict(x=[], y=[], z=[], color=COL_RED, text=[], name=""))
@@ -312,24 +371,8 @@ def compute_dynamic(time_offset_min=0):
     return current_pos, valid, risk_slots, stats, now, jd0, fr0
 
 
-_static = build_static_traces()
-_init_pos, _init_valid, _init_risk_slots, _init_stats, _init_now, _, _ = compute_dynamic(0)
-_lock_trace = go.Scatter3d(x=[], y=[], z=[], mode="markers", marker=dict(size=8, color=COL_HIGHLIGHT, symbol="diamond",
-    line=dict(color=COL_BLUE, width=2)), hoverinfo="text", text=[], name="Selected", showlegend=False)
-_orbit_trace = go.Scatter3d(x=[], y=[], z=[], mode="lines", line=dict(color=COL_BLUE, width=3, dash="dot"),
-    hoverinfo="skip", name="Orbit", showlegend=False)
-_initial_fig = go.Figure(data=_static + [build_swarm_trace(_init_pos, _init_valid)] + [
-    go.Scatter3d(x=s["x"], y=s["y"], z=s["z"], mode="lines+markers", line=dict(color=s["color"], width=6),
-        marker=dict(size=4, color=s["color"]), text=s["text"], hoverinfo="text", name=s["name"], showlegend=False)
-    for s in _init_risk_slots] + [_lock_trace, _orbit_trace])
-# NOTE: no custom camera override here -- Plotly's auto-computed default (which correctly
-# frames the full data extent) is what actually worked in earlier versions. A hand-tuned
-# eye/center here previously risked placing the camera inside/against the Earth.
-_initial_fig.update_layout(
-    scene=dict(xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
-               bgcolor="#0a0d12", aspectmode="data"),
-    paper_bgcolor="#0a0d12", font=dict(color="#d6dce4", family="JetBrains Mono, monospace"),
-    showlegend=False, margin=dict(l=0, r=0, t=0, b=0), uirevision="keep")
+_initial_fig = go.Figure()
+_init_stats = {"leaderboard": [], "updated_utc": datetime.now(timezone.utc)}
 
 
 def stat_card(label, value_id, color=COL_BLUE):
@@ -345,7 +388,30 @@ LEADERBOARD_COLUMNS = [
 ]
 
 app = Dash(__name__)
-app.layout = html.Div(className="app-shell", children=[
+app.layout = html.Div("OrbitSense is initializing...")
+
+
+def build_initial_state():
+    _static = build_static_traces()
+    _init_pos, _init_valid, _init_risk_slots, _stats, _, _, _ = compute_dynamic(0)
+    _lock_trace = go.Scatter3d(x=[], y=[], z=[], mode="markers", marker=dict(size=8, color=COL_HIGHLIGHT, symbol="diamond",
+        line=dict(color=COL_BLUE, width=2)), hoverinfo="text", text=[], name="Selected", showlegend=False)
+    _orbit_trace = go.Scatter3d(x=[], y=[], z=[], mode="lines", line=dict(color=COL_BLUE, width=3, dash="dot"),
+        hoverinfo="skip", name="Orbit", showlegend=False)
+    fig = go.Figure(data=_static + [build_swarm_trace(_init_pos, _init_valid)] + [
+        go.Scatter3d(x=s["x"], y=s["y"], z=s["z"], mode="lines+markers", line=dict(color=s["color"], width=6),
+            marker=dict(size=4, color=s["color"]), text=s["text"], hoverinfo="text", name=s["name"], showlegend=False)
+        for s in _init_risk_slots] + [_lock_trace, _orbit_trace])
+    fig.update_layout(
+        scene=dict(xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
+                   bgcolor="#0a0d12", aspectmode="data"),
+        paper_bgcolor="#0a0d12", font=dict(color="#d6dce4", family="JetBrains Mono, monospace"),
+        showlegend=False, margin=dict(l=0, r=0, t=0, b=0), uirevision="keep")
+    return fig, _stats
+
+
+def configure_layout(initial_fig, initial_stats):
+    app.layout = html.Div(className="app-shell", children=[
 
     html.Div(className="topbar", style={"display": "flex", "alignItems": "center", "justifyContent": "space-between", "padding": "0 18px"}, children=[
         html.Div(style={"display": "flex", "alignItems": "center"}, children=[
@@ -356,8 +422,8 @@ app.layout = html.Div(className="app-shell", children=[
         html.Div(style={"display": "flex", "alignItems": "center", "gap": "8px"}, children=[
             dcc.Input(id="search-input", type="text", placeholder="Search satellite or NORAD ID",
                       style={"width": "230px"}, n_submit=0),
-            html.Button("LOCATE", id="search-btn", n_clicks=0, className="btn btn-primary"),
-            html.Button("CLEAR", id="clear-focus-btn", n_clicks=0, className="btn"),
+            html.Button("LOCATE", id="search-btn", n_clicks=0, className="btn btn-primary", title="Locate selected satellite"),
+            html.Button("CLEAR", id="clear-focus-btn", n_clicks=0, className="btn", title="Clear selected satellite"),
             html.Div(id="search-feedback", className="mono", style={"color": COL_AMBER, "fontSize": "10.5px"}),
         ]),
         html.Div(style={"display": "flex", "alignItems": "center", "gap": "14px"}, children=[
@@ -380,7 +446,7 @@ app.layout = html.Div(className="app-shell", children=[
     ]),
 
     html.Div(className="center-canvas", children=[
-        dcc.Graph(id="live-graph", figure=_initial_fig, style={"height": "100%", "width": "100%"}, config={"displayModeBar": False}),
+        dcc.Graph(id="live-graph", figure=initial_fig, style={"height": "100%", "width": "100%"}, config={"displayModeBar": False}),
         html.Div(style={"position": "absolute", "bottom": "12px", "right": "12px",
                          "background": "rgba(16,20,27,0.88)", "border": "1px solid #232a35", "borderRadius": "2px",
                          "padding": "9px 12px", "fontSize": "10px", "lineHeight": "1.8"}, className="mono", children=[
@@ -432,14 +498,14 @@ app.layout = html.Div(className="app-shell", children=[
                    marks={-180: "-3h", -90: "-1.5h", 0: "NOW", 90: "+1.5h", 180: "+3h"},
                    tooltip={"placement": "bottom", "always_visible": False}),
         html.Div(style={"display": "flex", "gap": "8px", "alignItems": "center", "marginTop": "6px", "flexWrap": "wrap"}, children=[
-            html.Button("-5m", id="step-back-btn", n_clicks=0, className="btn"),
-            html.Button("PLAY", id="play-btn", n_clicks=0, className="btn btn-primary"),
-            html.Button("+5m", id="step-fwd-btn", n_clicks=0, className="btn"),
-            html.Button("RESET", id="reset-btn", n_clicks=0, className="btn btn-amber"),
+            html.Button("-5m", id="step-back-btn", n_clicks=0, className="btn", title="Move simulation backward by 5 minutes"),
+            html.Button("PLAY", id="play-btn", n_clicks=0, className="btn btn-primary", title="Play time scrubber"),
+            html.Button("+5m", id="step-fwd-btn", n_clicks=0, className="btn", title="Move simulation forward by 5 minutes"),
+            html.Button("RESET", id="reset-btn", n_clicks=0, className="btn btn-amber", title="Reset time to now"),
             dcc.Dropdown(id="speed-choice", options=[{"label": "1x", "value": 1}, {"label": "5x", "value": 5},
                          {"label": "10x", "value": 10}, {"label": "50x", "value": 50}],
                          value=10, clearable=False, style={"width": "72px"}),
-            html.Button("PAUSE LIVE", id="pause-btn", n_clicks=0, className="btn", style={"marginLeft": "auto"}),
+            html.Button("PAUSE LIVE", id="pause-btn", n_clicks=0, className="btn", title="Pause or resume live refresh", style={"marginLeft": "auto"}),
             dcc.Dropdown(id="interval-choice", options=[{"label": "15s", "value": 15}, {"label": "30s", "value": 30},
                          {"label": "60s", "value": 60}], value=30, clearable=False, style={"width": "72px"}),
         ]),
@@ -448,12 +514,12 @@ app.layout = html.Div(className="app-shell", children=[
     dcc.Interval(id="refresh", interval=30 * 1000, n_intervals=0),
     dcc.Interval(id="play-interval", interval=2000, n_intervals=0, disabled=True),
     dcc.Interval(id="clock-interval", interval=1000, n_intervals=0),
-    dcc.Store(id="leaderboard-store", data=_init_stats["leaderboard"]),
-    dcc.Store(id="selected-pair-store", data=(_init_stats["leaderboard"][0] if _init_stats["leaderboard"] else None)),
+    dcc.Store(id="leaderboard-store", data=initial_stats["leaderboard"]),
+    dcc.Store(id="selected-pair-store", data=(initial_stats["leaderboard"][0] if initial_stats["leaderboard"] else None)),
     dcc.Store(id="focus-camera-store", data=None),
     dcc.Store(id="locked-sat-store", data=None),
-    dcc.Store(id="last-computed-utc", data=_init_stats["updated_utc"].isoformat()),
-])
+    dcc.Store(id="last-computed-utc", data=initial_stats["updated_utc"].isoformat()),
+    ])
 
 
 @app.callback(Output("clock", "children"), Input("clock-interval", "n_intervals"), Input("tz-choice", "value"))
@@ -712,5 +778,19 @@ def update_sandbox(dv_m_s, sigma_m, mode, pair):
     ])
 
 
+def create_app():
+    global _initial_fig, _init_stats
+    initialize_runtime()
+    _initial_fig, _init_stats = build_initial_state()
+    configure_layout(_initial_fig, _init_stats)
+    return app
+
+
 if __name__ == "__main__":
-    app.run(debug=False, port=8050)
+    try:
+        create_app().run(debug=False, port=8050)
+    except Exception as exc:
+        raise SystemExit(
+            "OrbitSense failed to start. Check network connectivity for CelesTrak/texture downloads "
+            f"or use a valid tle_cache.txt. Details: {exc}"
+        ) from exc

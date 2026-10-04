@@ -33,25 +33,41 @@ def probability_of_collision(miss_distance_m, sigma_m, hard_body_radius_m):
     return pc
 
 
-def main():
+def compute_historical_metrics(search_seconds=180, step_seconds=0.1):
     iridium = Satrec.twoline2rv(IRIDIUM_L1, IRIDIUM_L2)
     cosmos = Satrec.twoline2rv(COSMOS_L1, COSMOS_L2)
-
-    # ---- find the true closest approach around the documented collision time ----
     best = None
-    for offset_s in np.arange(-180, 180, 0.1):
+    for offset_s in np.arange(-search_seconds, search_seconds, step_seconds):
         t = DOCUMENTED_COLLISION_TIME + timedelta(seconds=float(offset_s))
         jd, fr = jday(t.year, t.month, t.day, t.hour, t.minute, t.second + t.microsecond / 1e6)
         e1, p1, v1 = iridium.sgp4(jd, fr)
         e2, p2, v2 = cosmos.sgp4(jd, fr)
+        if e1 != 0 or e2 != 0:
+            continue
         d = np.linalg.norm(np.array(p1) - np.array(p2))
         if best is None or d < best["d"]:
             best = dict(d=d, offset=offset_s, p1=np.array(p1), p2=np.array(p2),
                         v1=np.array(v1), v2=np.array(v2), t=t)
-
+    if best is None:
+        raise RuntimeError("No valid SGP4 samples found for historical validation window.")
     miss_km = best["d"]
     miss_m = miss_km * 1000
     rel_v = np.linalg.norm(best["v1"] - best["v2"])
+    return {
+        "best": best,
+        "miss_km": miss_km,
+        "miss_m": miss_m,
+        "rel_v": rel_v,
+    }
+
+
+def main():
+    iridium = Satrec.twoline2rv(IRIDIUM_L1, IRIDIUM_L2)
+    cosmos = Satrec.twoline2rv(COSMOS_L1, COSMOS_L2)
+    metrics = compute_historical_metrics()
+    best = metrics["best"]
+    miss_m = metrics["miss_m"]
+    rel_v = metrics["rel_v"]
 
     print("=" * 70)
     print("HISTORICAL VALIDATION: Iridium 33 / Cosmos 2251, 10 Feb 2009")

@@ -112,3 +112,26 @@ input[type=radio], input[type=checkbox] { accent-color: var(--blue); }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: var(--bg-base); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+@media (max-width: 1100px) {
+  html, body { overflow: auto; }
+  .app-shell {
+    grid-template-rows: 52px auto minmax(420px, 56vh) auto auto;
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "topbar"
+      "left"
+      "center"
+      "right"
+      "bottom";
+    height: auto;
+    min-height: 100vh;
+  }
+  .left-deck, .right-deck, .bottom-dock { min-height: 180px; }
+  .topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: flex-start !important;
+    padding: 8px 12px !important;
+  }
+}
