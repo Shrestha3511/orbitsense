@@ -6,9 +6,9 @@ Interactive satellite conjunction awareness dashboard for education and research
 
 ## Canonical app entry point
 
-- **Run:** `python /home/runner/work/orbitsense/orbitsense/live_tracker_v8.py`
+- **Run:** `python live_tracker_v8.py`
 - `live_tracker_v8.py` is the maintained canonical dashboard entry point.
-- Older tracker versions are preserved under `/home/runner/work/orbitsense/orbitsense/archive/experiments/` as historical references.
+- Older tracker versions are preserved under `archive/experiments/` as historical references.
 
 ## Features
 
@@ -67,12 +67,20 @@ python historical_validation.py
 python risk_map.py
 python orbit_visual.py
 python cam_simulator.py
-python first_test.py
+python archive/first_test.py
 ```
+
+## Generated HTML demos
+
+These interactive HTML files are committed for quick browser previews:
+
+- [Historical validation](historical_validation.html) — 3D view of the Iridium 33 / Cosmos 2251 close approach.
+- [Conjunction risk map](risk_map.html) — batch visualization of candidate conjunction risks.
+- [Orbit view](orbit_view.html) — basic 3D orbital tracks for the loaded satellites.
 
 Legacy tracker snapshots:
 
-- `/home/runner/work/orbitsense/orbitsense/archive/experiments/live_tracker_v1.py` ... `live_tracker_v7.py`
+- `archive/experiments/live_tracker_v1.py` through `archive/experiments/live_tracker_v7.py`
 
 ## Repository structure
 
@@ -83,7 +91,10 @@ historical_validation.py        Iridium 33 / Cosmos 2251 validation
 cam_simulator.py                Maneuver simulation experiment
 risk_map.py                     Batch conjunction-risk visualization
 orbit_visual.py                 Basic orbital track visualization
-first_test.py                   Minimal TLE + SGP4 connectivity script
+archive/first_test.py            Minimal TLE + SGP4 connectivity check
+historical_validation.html       Interactive historical encounter view
+risk_map.html                    Interactive conjunction-risk map
+orbit_view.html                  Interactive orbital tracks
 archive/experiments/            Historical live tracker versions (v1-v7)
 assets/style.css                Dashboard styling and responsive tweaks
 tests/                          Pytest coverage for core scientific logic
